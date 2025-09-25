@@ -7,8 +7,6 @@ markdown
 Real-time communication menggunakan SignalR dengan Redis backplane untuk scale-out. Support WebSocket, Server-Sent Events, dan Long Polling fallbacks.
 
 ## Architecture Diagram
-
-```mermaid
 graph TB
     subgraph "Client Applications"
         A[Flutter Mobile App]
