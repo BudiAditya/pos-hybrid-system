@@ -38,6 +38,7 @@ graph TB
     F --> G
     H --> G
     I --> G
+
 Step 1: SignalR Hub Implementation
 1.1 Main POS Hub
 csharp
