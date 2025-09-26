@@ -1,0 +1,145 @@
+// templates/mobile/product_repository.dart
+import 'package:pos_mobile/core/entities/product.dart';
+import 'package:pos_mobile/core/services/api_service.dart';
+import 'package:pos_mobile/core/services/local_storage.dart';
+
+abstract class ProductRepository {
+  Future<List<Product>> getProducts({
+    required String storeId,
+    int page = 1,
+    int limit = 20,
+    bool includeInactive = false,
+  });
+
+  Future<Product> getProductById(String productId);
+  Future<List<Product>> searchProducts(String query);
+  Future<void> syncProducts();
+  Future<void> saveProductsLocally(List<Product> products);
+}
+
+class ProductRepositoryImpl implements ProductRepository {
+  final ApiService apiService;
+  final LocalStorage localStorage;
+  final ConnectivityService connectivityService;
+
+  ProductRepositoryImpl({
+    required this.apiService,
+    required this.localStorage,
+    required this.connectivityService,
+  });
+
+  @override
+  Future<List<Product>> getProducts({
+    required String storeId,
+    int page = 1,
+    int limit = 20,
+    bool includeInactive = false,
+  }) async {
+    final isConnected = await connectivityService.isConnected();
+
+    if (isConnected) {
+      try {
+        // Try to get from API first
+        final products = await apiService.getProducts(
+          storeId: storeId,
+          page: page,
+          limit: limit,
+          includeInactive: includeInactive,
+        );
+
+        // Cache the results
+        await saveProductsLocally(products);
+        return products;
+      } catch (e) {
+        // Fallback to local storage if API fails
+        final localProducts = await localStorage.getProducts(
+          storeId: storeId,
+          page: page,
+          limit: limit,
+        );
+        return localProducts;
+      }
+    } else {
+      // Offline mode: use local storage
+      final localProducts = await localStorage.getProducts(
+        storeId: storeId,
+        page: page,
+        limit: limit,
+      );
+      return localProducts;
+    }
+  }
+
+  @override
+  Future<Product> getProductById(String productId) async {
+    // Try local first for faster response
+    final localProduct = await localStorage.getProductById(productId);
+    if (localProduct != null) {
+      return localProduct;
+    }
+
+    // If not found locally, try API
+    final isConnected = await connectivityService.isConnected();
+    if (isConnected) {
+      final product = await apiService.getProductById(productId);
+      await localStorage.saveProduct(product);
+      return product;
+    } else {
+      throw Exception('Product not found and no internet connection');
+    }
+  }
+
+  @override
+  Future<List<Product>> searchProducts(String query) async {
+    final isConnected = await connectivityService.isConnected();
+
+    if (isConnected) {
+      try {
+        final results = await apiService.searchProducts(query);
+        return results;
+      } catch (e) {
+        // Fallback to local search
+        return await localStorage.searchProducts(query);
+      }
+    } else {
+      return await localStorage.searchProducts(query);
+    }
+  }
+
+  @override
+  Future<void> syncProducts() async {
+    final isConnected = await connectivityService.isConnected();
+    if (!isConnected) {
+      throw Exception('No internet connection for sync');
+    }
+
+    try {
+      // Get last sync timestamp
+      final lastSync = await localStorage.getLastSyncTime();
+      
+      // Get updated products from API
+      final updatedProducts = await apiService.getProductsForSync(
+        lastSync: lastSync,
+      );
+
+      // Save updated products locally
+      await localStorage.saveProducts(updatedProducts);
+
+      // Get local changes to push to server
+      final localChanges = await localStorage.getUnsyncedProducts();
+      for (final product in localChanges) {
+        await apiService.updateProduct(product);
+        await localStorage.markProductAsSynced(product.id);
+      }
+
+      await localStorage.updateLastSyncTime(DateTime.now());
+    } catch (e) {
+      throw Exception('Sync failed: $e');
+    }
+  }
+
+  @override
+  Future<void> saveProductsLocally(List<Product> products) async {
+    await localStorage.saveProducts(products);
+  }
+}
