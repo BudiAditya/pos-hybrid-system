@@ -1,0 +1,232 @@
+// templates/mobile/product_bloc.dart
+import 'package:bloc/bloc.dart';
+import 'package:equatable/equatable.dart';
+import 'package:pos_mobile/core/entities/product.dart';
+import 'package:pos_mobile/core/repositories/product_repository.dart';
+
+part 'product_event.dart';
+part 'product_state.dart';
+
+class ProductBloc extends Bloc<ProductEvent, ProductState> {
+  final ProductRepository productRepository;
+
+  ProductBloc({required this.productRepository}) : super(ProductInitial()) {
+    on<LoadProducts>(_onLoadProducts);
+    on<SearchProducts>(_onSearchProducts);
+    on<LoadProductDetail>(_onLoadProductDetail);
+    on<SyncProducts>(_onSyncProducts);
+    on<AddToCart>(_onAddToCart);
+  }
+
+  Future<void> _onLoadProducts(
+    LoadProducts event,
+    Emitter<ProductState> emit,
+  ) async {
+    emit(ProductLoading());
+    
+    try {
+      final products = await productRepository.getProducts(
+        storeId: event.storeId,
+        page: event.page,
+        limit: event.limit,
+        includeInactive: event.includeInactive,
+      );
+      emit(ProductLoaded(products: products));
+    } catch (e) {
+      emit(ProductError(message: 'Failed to load products: $e'));
+    }
+  }
+
+  Future<void> _onSearchProducts(
+    SearchProducts event,
+    Emitter<ProductState> emit,
+  ) async {
+    if (event.query.isEmpty) {
+      add(LoadProducts(storeId: event.storeId));
+      return;
+    }
+
+    emit(ProductLoading());
+    
+    try {
+      final products = await productRepository.searchProducts(event.query);
+      emit(ProductLoaded(products: products));
+    } catch (e) {
+      emit(ProductError(message: 'Search failed: $e'));
+    }
+  }
+
+  Future<void> _onLoadProductDetail(
+    LoadProductDetail event,
+    Emitter<ProductState> emit,
+  ) async {
+    emit(ProductDetailLoading());
+    
+    try {
+      final product = await productRepository.getProductById(event.productId);
+      emit(ProductDetailLoaded(product: product));
+    } catch (e) {
+      emit(ProductDetailError(message: 'Failed to load product: $e'));
+    }
+  }
+
+  Future<void> _onSyncProducts(
+    SyncProducts event,
+    Emitter<ProductState> emit,
+  ) async {
+    emit(ProductSyncing());
+    
+    try {
+      await productRepository.syncProducts();
+      emit(ProductSyncSuccess());
+      add(LoadProducts(storeId: event.storeId));
+    } catch (e) {
+      emit(ProductSyncError(message: 'Sync failed: $e'));
+    }
+  }
+
+  Future<void> _onAddToCart(
+    AddToCart event,
+    Emitter<ProductState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is ProductLoaded) {
+      // Update product stock locally
+      final updatedProducts = currentState.products.map((product) {
+        if (product.id == event.product.id) {
+          return product.copyWith(
+            stockQuantity: product.stockQuantity - event.quantity,
+          );
+        }
+        return product;
+      }).toList();
+
+      emit(ProductLoaded(products: updatedProducts));
+    }
+  }
+}
+
+// Product Events
+abstract class ProductEvent extends Equatable {
+  const ProductEvent();
+
+  @override
+  List<Object> get props => [];
+}
+
+class LoadProducts extends ProductEvent {
+  final String storeId;
+  final int page;
+  final int limit;
+  final bool includeInactive;
+
+  const LoadProducts({
+    required this.storeId,
+    this.page = 1,
+    this.limit = 20,
+    this.includeInactive = false,
+  });
+
+  @override
+  List<Object> get props => [storeId, page, limit, includeInactive];
+}
+
+class SearchProducts extends ProductEvent {
+  final String query;
+
+  const SearchProducts(this.query);
+
+  @override
+  List<Object> get props => [query];
+}
+
+class LoadProductDetail extends ProductEvent {
+  final String productId;
+
+  const LoadProductDetail(this.productId);
+
+  @override
+  List<Object> get props => [productId];
+}
+
+class SyncProducts extends ProductEvent {
+  final String storeId;
+
+  const SyncProducts(this.storeId);
+
+  @override
+  List<Object> get props => [storeId];
+}
+
+class AddToCart extends ProductEvent {
+  final Product product;
+  final int quantity;
+
+  const AddToCart({required this.product, this.quantity = 1});
+
+  @override
+  List<Object> get props => [product, quantity];
+}
+
+// Product States
+abstract class ProductState extends Equatable {
+  const ProductState();
+
+  @override
+  List<Object> get props => [];
+}
+
+class ProductInitial extends ProductState {}
+
+class ProductLoading extends ProductState {}
+
+class ProductLoaded extends ProductState {
+  final List<Product> products;
+
+  const ProductLoaded({required this.products});
+
+  @override
+  List<Object> get props => [products];
+}
+
+class ProductError extends ProductState {
+  final String message;
+
+  const ProductError({required this.message});
+
+  @override
+  List<Object> get props => [message];
+}
+
+class ProductDetailLoading extends ProductState {}
+
+class ProductDetailLoaded extends ProductState {
+  final Product product;
+
+  const ProductDetailLoaded({required this.product});
+
+  @override
+  List<Object> get props => [product];
+}
+
+class ProductDetailError extends ProductState {
+  final String message;
+
+  const ProductDetailError({required this.message});
+
+  @override
+  List<Object> get props => [message];
+}
+
+class ProductSyncing extends ProductState {}
+
+class ProductSyncSuccess extends ProductState {}
+
+class ProductSyncError extends ProductState {
+  final String message;
+
+  const ProductSyncError({required this.message});
+
+  @override
+  List<Object> get props => [message];
+}
