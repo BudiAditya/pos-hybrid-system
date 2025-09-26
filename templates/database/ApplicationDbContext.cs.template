@@ -1,0 +1,143 @@
+// templates/database/ApplicationDbContext.cs
+using Microsoft.EntityFrameworkCore;
+using POSCloud.Core.Entities;
+
+namespace POSCloud.Infrastructure.Data;
+
+public class ApplicationDbContext : DbContext
+{
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
+
+    // DbSets
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<Transaction> Transactions => Set<Transaction>();
+    public DbSet<TransactionItem> TransactionItems => Set<TransactionItem>();
+    public DbSet<Store> Stores => Set<Store>();
+    public DbSet<StoreUser> StoreUsers => Set<StoreUser>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        // Product configuration
+        modelBuilder.Entity<Product>(entity =>
+        {
+            entity.HasKey(p => p.Id);
+            entity.HasIndex(p => new { p.StoreId, p.Code }).IsUnique();
+            entity.HasIndex(p => new { p.StoreId, p.Barcode }).IsUnique();
+
+            entity.Property(p => p.Name).IsRequired().HasMaxLength(100);
+            entity.Property(p => p.Code).IsRequired().HasMaxLength(20);
+            entity.Property(p => p.Barcode).HasMaxLength(50);
+            entity.Property(p => p.Price).HasColumnType("decimal(18,2)");
+            entity.Property(p => p.CostPrice).HasColumnType("decimal(18,2)");
+            entity.Property(p => p.Category).HasMaxLength(50);
+            entity.Property(p => p.Unit).HasMaxLength(20);
+
+            entity.HasOne(p => p.Store)
+                  .WithMany(s => s.Products)
+                  .HasForeignKey(p => p.StoreId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Transaction configuration
+        modelBuilder.Entity<Transaction>(entity =>
+        {
+            entity.HasKey(t => t.Id);
+            entity.HasIndex(t => t.TransactionNumber).IsUnique();
+
+            entity.Property(t => t.TransactionNumber).IsRequired().HasMaxLength(20);
+            entity.Property(t => t.Subtotal).HasColumnType("decimal(18,2)");
+            entity.Property(t => t.TaxAmount).HasColumnType("decimal(18,2)");
+            entity.Property(t => t.DiscountAmount).HasColumnType("decimal(18,2)");
+            entity.Property(t => t.TotalAmount).HasColumnType("decimal(18,2)");
+            entity.Property(t => t.AmountPaid).HasColumnType("decimal(18,2)");
+            entity.Property(t => t.ChangeAmount).HasColumnType("decimal(18,2)");
+            entity.Property(t => t.CustomerName).HasMaxLength(100);
+            entity.Property(t => t.CustomerPhone).HasMaxLength(20);
+
+            entity.HasOne(t => t.Store)
+                  .WithMany(s => s.Transactions)
+                  .HasForeignKey(t => t.StoreId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(t => t.Items)
+                  .WithOne(ti => ti.Transaction)
+                  .HasForeignKey(ti => ti.TransactionId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TransactionItem configuration
+        modelBuilder.Entity<TransactionItem>(entity =>
+        {
+            entity.HasKey(ti => ti.Id);
+
+            entity.Property(ti => ti.UnitPrice).HasColumnType("decimal(18,2)");
+            entity.Property(ti => ti.DiscountAmount).HasColumnType("decimal(18,2)");
+            entity.Property(ti => ti.TotalPrice).HasColumnType("decimal(18,2)");
+
+            entity.HasOne(ti => ti.Product)
+                  .WithMany(p => p.TransactionItems)
+                  .HasForeignKey(ti => ti.ProductId)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Store configuration
+        modelBuilder.Entity<Store>(entity =>
+        {
+            entity.HasKey(s => s.Id);
+            entity.HasIndex(s => s.Code).IsUnique();
+
+            entity.Property(s => s.Name).IsRequired().HasMaxLength(100);
+            entity.Property(s => s.Code).IsRequired().HasMaxLength(20);
+            entity.Property(s => s.Address).HasMaxLength(200);
+            entity.Property(s => s.Phone).HasMaxLength(20);
+            entity.Property(s => s.Email).HasMaxLength(100);
+        });
+
+        // StoreUser configuration
+        modelBuilder.Entity<StoreUser>(entity =>
+        {
+            entity.HasKey(su => su.Id);
+
+            entity.Property(su => su.Username).IsRequired().HasMaxLength(50);
+            entity.Property(su => su.Email).HasMaxLength(100);
+            entity.Property(su => su.Role).IsRequired().HasMaxLength(20);
+
+            entity.HasOne(su => su.Store)
+                  .WithMany(s => s.StoreUsers)
+                  .HasForeignKey(su => su.StoreId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        UpdateTimestamps();
+        return await base.SaveChangesAsync(cancellationToken);
+    }
+
+    public override int SaveChanges()
+    {
+        UpdateTimestamps();
+        return base.SaveChanges();
+    }
+
+    private void UpdateTimestamps()
+    {
+        var entries = ChangeTracker.Entries<BaseEntity>()
+            .Where(e => e.State == EntityState.Modified || e.State == EntityState.Added);
+
+        var currentTime = DateTime.UtcNow;
+
+        foreach (var entry in entries)
+        {
+            entry.Entity.UpdatedAt = currentTime;
+
+            if (entry.State == EntityState.Added)
+            {
+                entry.Entity.CreatedAt = currentTime;
+            }
+        }
+    }
+}
