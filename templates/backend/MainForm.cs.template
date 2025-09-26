@@ -1,0 +1,300 @@
+// templates/desktop/MainForm.cs
+using POSDesktop.Core.Entities;
+using POSDesktop.Core.Interfaces;
+using POSDesktop.Hardware;
+using POSDesktop.Sync;
+
+namespace POSDesktop.Forms;
+
+public partial class MainForm : Form
+{
+    private readonly IProductRepository _productRepository;
+    private readonly ITransactionService _transactionService;
+    private readonly ISyncService _syncService;
+    private readonly IHardwareService _hardwareService;
+    private readonly ISignalRService _signalRService;
+
+    private BindingList<Product> _products = new();
+    private BindingList<CartItem> _cartItems = new();
+    private decimal _cartTotal = 0;
+    private string _currentStoreId = string.Empty;
+
+    public MainForm(
+        IProductRepository productRepository,
+        ITransactionService transactionService,
+        ISyncService syncService,
+        IHardwareService hardwareService,
+        ISignalRService signalRService)
+    {
+        InitializeComponent();
+        
+        _productRepository = productRepository;
+        _transactionService = transactionService;
+        _syncService = syncService;
+        _hardwareService = hardwareService;
+        _signalRService = signalRService;
+
+        SetupDataBinding();
+        InitializeAsync();
+    }
+
+    private async void InitializeAsync()
+    {
+        try
+        {
+            // Initialize hardware
+            await _hardwareService.InitializeAsync();
+            _hardwareService.BarcodeScanned += OnBarcodeScanned;
+
+            // Initialize real-time connection
+            await _signalRService.ConnectAsync();
+            _signalRService.StockUpdated += OnStockUpdated;
+            _signalRService.NewTransaction += OnNewTransaction;
+
+            // Load initial data
+            await LoadProductsAsync();
+            UpdateStatus("System ready");
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Initialization failed: {ex.Message}");
+        }
+    }
+
+    private void SetupDataBinding()
+    {
+        // Products data grid
+        productsDataGrid.AutoGenerateColumns = false;
+        productsDataGrid.DataSource = _products;
+
+        // Configure columns
+        productsDataGrid.Columns.Add(new DataGridViewTextBoxColumn 
+        { 
+            DataPropertyName = "Name", 
+            HeaderText = "Product Name",
+            Width = 200 
+        });
+        productsDataGrid.Columns.Add(new DataGridViewTextBoxColumn 
+        { 
+            DataPropertyName = "Price", 
+            HeaderText = "Price",
+            Width = 80,
+            DefaultCellStyle = new DataGridViewCellStyle { Format = "C2" }
+        });
+        productsDataGrid.Columns.Add(new DataGridViewTextBoxColumn 
+        { 
+            DataPropertyName = "StockQuantity", 
+            HeaderText = "Stock",
+            Width = 60 
+        });
+
+        // Cart data grid
+        cartDataGrid.AutoGenerateColumns = false;
+        cartDataGrid.DataSource = _cartItems;
+
+        // Event handlers
+        _products.ListChanged += (s, e) => UpdateProductDisplay();
+        _cartItems.ListChanged += (s, e) => CalculateTotal();
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        try
+        {
+            var products = await _productRepository.GetAllAsync();
+            _products.Clear();
+            foreach (var product in products)
+            {
+                _products.Add(product);
+            }
+            UpdateStatus($"Loaded {products.Count} products");
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Failed to load products: {ex.Message}");
+        }
+    }
+
+    private void OnBarcodeScanned(object? sender, BarcodeScannedEventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action<object?, BarcodeScannedEventArgs>(OnBarcodeScanned), sender, e);
+            return;
+        }
+
+        try
+        {
+            var product = _products.FirstOrDefault(p => p.Barcode == e.Barcode);
+            if (product != null)
+            {
+                AddToCart(product);
+                UpdateStatus($"Scanned: {product.Name}");
+            }
+            else
+            {
+                ShowError($"Product not found for barcode: {e.Barcode}");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Barcode scan error: {ex.Message}");
+        }
+    }
+
+    private void AddToCart(Product product, int quantity = 1)
+    {
+        var existingItem = _cartItems.FirstOrDefault(i => i.ProductId == product.Id);
+        
+        if (existingItem != null)
+        {
+            existingItem.Quantity += quantity;
+            existingItem.TotalPrice = existingItem.Quantity * existingItem.UnitPrice;
+        }
+        else
+        {
+            _cartItems.Add(new CartItem
+            {
+                ProductId = product.Id,
+                ProductName = product.Name,
+                Quantity = quantity,
+                UnitPrice = product.Price,
+                TotalPrice = product.Price * quantity
+            });
+        }
+
+        CalculateTotal();
+        UpdateCartDisplay();
+    }
+
+    private void CalculateTotal()
+    {
+        _cartTotal = _cartItems.Sum(item => item.TotalPrice);
+        totalLabel.Text = _cartTotal.ToString("C2");
+
+        // Update change calculation
+        if (decimal.TryParse(amountPaidTextBox.Text, out decimal amountPaid))
+        {
+            changeLabel.Text = (amountPaid - _cartTotal).ToString("C2");
+        }
+    }
+
+    private async void ProcessPaymentButton_Click(object sender, EventArgs e)
+    {
+        if (_cartItems.Count == 0)
+        {
+            ShowError("Cart is empty");
+            return;
+        }
+
+        if (!decimal.TryParse(amountPaidTextBox.Text, out decimal amountPaid) || amountPaid < _cartTotal)
+        {
+            ShowError("Invalid amount paid");
+            return;
+        }
+
+        try
+        {
+            var paymentMethod = (PaymentMethod)paymentMethodComboBox.SelectedValue;
+            var transaction = await _transactionService.CreateTransactionAsync(
+                _cartItems.ToList(), 
+                paymentMethod, 
+                amountPaid,
+                customerNameTextBox.Text,
+                customerPhoneTextBox.Text);
+
+            // Print receipt
+            await _hardwareService.PrintReceiptAsync(transaction);
+
+            // Clear cart
+            _cartItems.Clear();
+            amountPaidTextBox.Text = "";
+            customerNameTextBox.Text = "";
+            customerPhoneTextBox.Text = "";
+
+            ShowSuccess($"Transaction completed: {transaction.TransactionNumber}");
+            UpdateStatus("Ready for next transaction");
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Transaction failed: {ex.Message}");
+        }
+    }
+
+    private void OnStockUpdated(object? sender, StockUpdatedEventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action<object?, StockUpdatedEventArgs>(OnStockUpdated), sender, e);
+            return;
+        }
+
+        var product = _products.FirstOrDefault(p => p.Id == e.ProductId);
+        if (product != null)
+        {
+            product.StockQuantity = e.NewStock;
+            productsDataGrid.Refresh();
+            UpdateStatus($"Stock updated: {product.Name} = {e.NewStock}");
+        }
+    }
+
+    private void OnNewTransaction(object? sender, NewTransactionEventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action<object?, NewTransactionEventArgs>(OnNewTransaction), sender, e);
+            return;
+        }
+
+        // Update UI dengan new transaction notification
+        UpdateStatus($"New transaction: {e.Transaction.TransactionNumber}");
+    }
+
+    private async void SyncButton_Click(object sender, EventArgs e)
+    {
+        try
+        {
+            syncButton.Enabled = false;
+            syncButton.Text = "Syncing...";
+
+            var result = await _syncService.SyncAsync();
+            if (result.Success)
+            {
+                await LoadProductsAsync();
+                ShowSuccess("Sync completed successfully");
+            }
+            else
+            {
+                ShowError($"Sync failed: {result.Message}");
+            }
+        }
+        finally
+        {
+            syncButton.Enabled = true;
+            syncButton.Text = "Sync";
+        }
+    }
+
+    private void ShowError(string message)
+    {
+        MessageBox.Show(message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        UpdateStatus($"Error: {message}");
+    }
+
+    private void ShowSuccess(string message)
+    {
+        MessageBox.Show(message, "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void UpdateStatus(string message)
+    {
+        statusLabel.Text = $"{DateTime.Now:HH:mm:ss} - {message}";
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _hardwareService?.Dispose();
+        _signalRService?.DisconnectAsync();
+        base.OnFormClosing(e);
+    }
+}
