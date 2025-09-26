@@ -1,0 +1,163 @@
+// templates/backend/Controllers/ProductsController.cs
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using POSCloud.Core.Entities;
+using POSCloud.Core.Interfaces;
+using POSCloud.Core.DTOs;
+
+namespace POSCloud.API.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+[Authorize]
+public class ProductsController : ControllerBase
+{
+    private readonly IProductRepository _productRepository;
+    private readonly ILogger<ProductsController> _logger;
+    private readonly IMapper _mapper;
+
+    public ProductsController(
+        IProductRepository productRepository, 
+        ILogger<ProductsController> logger, 
+        IMapper mapper)
+    {
+        _productRepository = productRepository;
+        _logger = logger;
+        _mapper = mapper;
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<ApiResponse<PagedResult<ProductDto>>>> GetProducts(
+        [FromQuery] ProductQueryParams queryParams)
+    {
+        try
+        {
+            var products = await _productRepository.GetPagedProductsAsync(queryParams);
+            var productDtos = _mapper.Map<List<ProductDto>>(products.Items);
+            
+            var result = new PagedResult<ProductDto>
+            {
+                Items = productDtos,
+                TotalCount = products.TotalCount,
+                PageNumber = products.PageNumber,
+                PageSize = products.PageSize,
+                TotalPages = products.TotalPages
+            };
+
+            return Ok(ApiResponse<PagedResult<ProductDto>>.Success(result));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving products for store {StoreId}", queryParams.StoreId);
+            return StatusCode(500, ApiResponse<PagedResult<ProductDto>>.Error("Internal server error"));
+        }
+    }
+
+    [HttpGet("{id}")]
+    public async Task<ActionResult<ApiResponse<ProductDto>>> GetProduct(Guid id)
+    {
+        try
+        {
+            var product = await _productRepository.GetByIdAsync(id);
+            if (product == null)
+            {
+                return NotFound(ApiResponse<ProductDto>.Error("Product not found"));
+            }
+
+            var productDto = _mapper.Map<ProductDto>(product);
+            return Ok(ApiResponse<ProductDto>.Success(productDto));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving product {ProductId}", id);
+            return StatusCode(500, ApiResponse<ProductDto>.Error("Internal server error"));
+        }
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ApiResponse<ProductDto>>> CreateProduct([FromBody] CreateProductDto createDto)
+    {
+        try
+        {
+            // Validate business rules
+            if (await _productRepository.CodeExistsAsync(createDto.StoreId, createDto.Code))
+            {
+                return BadRequest(ApiResponse<ProductDto>.Error("Product code already exists"));
+            }
+
+            var product = _mapper.Map<Product>(createDto);
+            await _productRepository.AddAsync(product);
+
+            var productDto = _mapper.Map<ProductDto>(product);
+            return CreatedAtAction(nameof(GetProduct), new { id = product.Id }, 
+                ApiResponse<ProductDto>.Success(productDto));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating product");
+            return StatusCode(500, ApiResponse<ProductDto>.Error("Internal server error"));
+        }
+    }
+
+    [HttpPut("{id}")]
+    public async Task<ActionResult<ApiResponse<ProductDto>>> UpdateProduct(
+        Guid id, [FromBody] UpdateProductDto updateDto)
+    {
+        try
+        {
+            var product = await _productRepository.GetByIdAsync(id);
+            if (product == null)
+            {
+                return NotFound(ApiResponse<ProductDto>.Error("Product not found"));
+            }
+
+            _mapper.Map(updateDto, product);
+            await _productRepository.UpdateAsync(product);
+
+            var productDto = _mapper.Map<ProductDto>(product);
+            return Ok(ApiResponse<ProductDto>.Success(productDto));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating product {ProductId}", id);
+            return StatusCode(500, ApiResponse<ProductDto>.Error("Internal server error"));
+        }
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<ActionResult<ApiResponse>> DeleteProduct(Guid id)
+    {
+        try
+        {
+            var product = await _productRepository.GetByIdAsync(id);
+            if (product == null)
+            {
+                return NotFound(ApiResponse.Error("Product not found"));
+            }
+
+            await _productRepository.DeleteAsync(product);
+            return Ok(ApiResponse.Success("Product deleted successfully"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting product {ProductId}", id);
+            return StatusCode(500, ApiResponse.Error("Internal server error"));
+        }
+    }
+
+    [HttpPost("bulk")]
+    public async Task<ActionResult<ApiResponse<BulkOperationResult>>> BulkOperations(
+        [FromBody] BulkProductOperations operations)
+    {
+        try
+        {
+            var result = await _productRepository.ProcessBulkOperationsAsync(operations);
+            return Ok(ApiResponse<BulkOperationResult>.Success(result));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing bulk operations");
+            return StatusCode(500, ApiResponse<BulkOperationResult>.Error("Internal server error"));
+        }
+    }
+}
