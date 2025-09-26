@@ -1,4 +1,5 @@
 // templates/backend/Controllers/ProductsController.cs
+
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using POSCloud.Core.Entities;
