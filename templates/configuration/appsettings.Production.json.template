@@ -1,0 +1,88 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5432;Database=pos_cloud;Username=pos_user;Password=your_secure_password_here;Pooling=true;Maximum Pool Size=100;Connection Idle Lifetime=300;"
+  },
+  
+  "Jwt": {
+    "Secret": "your-super-secure-jwt-secret-key-minimum-32-characters-long",
+    "Issuer": "pos-cloud.com",
+    "Audience": "pos-cloud.com",
+    "ExpiryMinutes": 1440,
+    "RefreshTokenExpiryMinutes": 10080
+  },
+
+  "Redis": {
+    "ConnectionString": "localhost:6379,password=your_redis_password_here,abortConnect=false,connectTimeout=30000,syncTimeout=30000",
+    "InstanceName": "POSCloud",
+    "DefaultDatabase": 0
+  },
+
+  "RabbitMQ": {
+    "HostName": "localhost",
+    "UserName": "posapp",
+    "Password": "your_rabbitmq_password_here",
+    "VirtualHost": "/",
+    "Port": 5672
+  },
+
+  "PaymentGateway": {
+    "BaseUrl": "https://api.midtrans.com/v2",
+    "ServerKey": "your_midtrans_server_key",
+    "ClientKey": "your_midtrans_client_key",
+    "MerchantId": "your_merchant_id",
+    "Environment": "production"
+  },
+
+  "Sync": {
+    "IntervalMinutes": 5,
+    "BatchSize": 100,
+    "MaxRetries": 3,
+    "RetryDelaySeconds": 5
+  },
+
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.EntityFrameworkCore.Database.Command": "Warning",
+      "Microsoft.EntityFrameworkCore.Infrastructure": "Warning"
+    },
+    "File": {
+      "Path": "/var/log/pos-cloud/app-.log",
+      "FileSizeLimitBytes": 10485760,
+      "RetainedFileCountLimit": 5,
+      "RollingInterval": "Day"
+    },
+    "Seq": {
+      "ServerUrl": "http://localhost:5341",
+      "ApiKey": "your_seq_api_key"
+    }
+  },
+
+  "Cors": {
+    "AllowedOrigins": [
+      "https://your-domain.com",
+      "https://www.your-domain.com",
+      "capacitor://localhost",
+      "ionic://localhost"
+    ],
+    "AllowedMethods": [ "GET", "POST", "PUT", "DELETE", "PATCH" ],
+    "AllowedHeaders": [ "Authorization", "Content-Type", "X-Requested-With" ],
+    "AllowCredentials": true
+  },
+
+  "RateLimiting": {
+    "PermitLimit": 1000,
+    "Window": 3600,
+    "QueueLimit": 100,
+    "RejectionStatusCode": 429
+  },
+
+  "HealthChecks": {
+    "EvaluationTimeInSeconds": 30,
+    "MinimumSecondsBetweenFailureNotifications": 60
+  },
+
+  "AllowedHosts": "*",
+  "Environment": "Production"
+}
