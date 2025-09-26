@@ -1,0 +1,204 @@
+// templates/backend/Repositories/ProductRepository.cs
+using Microsoft.EntityFrameworkCore;
+using POSCloud.Core.Entities;
+using POSCloud.Core.Interfaces;
+using POSCloud.Core.DTOs;
+
+namespace POSCloud.Infrastructure.Data.Repositories;
+
+public class ProductRepository : IProductRepository
+{
+    private readonly ApplicationDbContext _context;
+    private readonly ILogger<ProductRepository> _logger;
+
+    public ProductRepository(ApplicationDbContext context, ILogger<ProductRepository> logger)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    public async Task<Product?> GetByIdAsync(Guid id)
+    {
+        return await _context.Products
+            .Include(p => p.Store)
+            .FirstOrDefaultAsync(p => p.Id == id);
+    }
+
+    public async Task<Product?> GetByCodeAsync(Guid storeId, string code)
+    {
+        return await _context.Products
+            .FirstOrDefaultAsync(p => p.StoreId == storeId && p.Code == code && p.IsActive);
+    }
+
+    public async Task<Product?> GetByBarcodeAsync(Guid storeId, string barcode)
+    {
+        return await _context.Products
+            .FirstOrDefaultAsync(p => p.StoreId == storeId && p.Barcode == barcode && p.IsActive);
+    }
+
+    public async Task<PagedResult<Product>> GetPagedProductsAsync(ProductQueryParams queryParams)
+    {
+        var query = _context.Products.AsQueryable();
+
+        // Apply filters
+        if (!string.IsNullOrEmpty(queryParams.StoreId))
+        {
+            query = query.Where(p => p.StoreId == Guid.Parse(queryParams.StoreId));
+        }
+
+        if (!string.IsNullOrEmpty(queryParams.Search))
+        {
+            query = query.Where(p => p.Name.Contains(queryParams.Search) || 
+                                    p.Code.Contains(queryParams.Search) || 
+                                    p.Barcode.Contains(queryParams.Search));
+        }
+
+        if (!string.IsNullOrEmpty(queryParams.Category))
+        {
+            query = query.Where(p => p.Category == queryParams.Category);
+        }
+
+        if (!queryParams.IncludeInactive)
+        {
+            query = query.Where(p => p.IsActive);
+        }
+
+        // Apply sorting
+        query = queryParams.SortBy?.ToLower() switch
+        {
+            "name" => queryParams.SortOrder == "desc" ? 
+                     query.OrderByDescending(p => p.Name) : 
+                     query.OrderBy(p => p.Name),
+            "price" => queryParams.SortOrder == "desc" ? 
+                      query.OrderByDescending(p => p.Price) : 
+                      query.OrderBy(p => p.Price),
+            "stock" => queryParams.SortOrder == "desc" ? 
+                      query.OrderByDescending(p => p.StockQuantity) : 
+                      query.OrderBy(p => p.StockQuantity),
+            _ => query.OrderBy(p => p.Name)
+        };
+
+        // Get total count before pagination
+        var totalCount = await query.CountAsync();
+
+        // Apply pagination
+        var products = await query
+            .Skip((queryParams.Page - 1) * queryParams.Limit)
+            .Take(queryParams.Limit)
+            .ToListAsync();
+
+        return new PagedResult<Product>
+        {
+            Items = products,
+            TotalCount = totalCount,
+            PageNumber = queryParams.Page,
+            PageSize = queryParams.Limit,
+            TotalPages = (int)Math.Ceiling(totalCount / (double)queryParams.Limit)
+        };
+    }
+
+    public async Task<List<Product>> GetProductsForSyncAsync(Guid storeId, DateTime lastSync)
+    {
+        return await _context.Products
+            .Where(p => p.StoreId == storeId && p.UpdatedAt > lastSync)
+            .ToListAsync();
+    }
+
+    public async Task<List<Product>> GetLowStockProductsAsync(Guid storeId)
+    {
+        return await _context.Products
+            .Where(p => p.StoreId == storeId && p.IsActive && 
+                       p.StockQuantity <= p.MinimumStock)
+            .OrderBy(p => p.StockQuantity)
+            .ToListAsync();
+    }
+
+    public async Task<bool> CodeExistsAsync(Guid storeId, string code)
+    {
+        return await _context.Products
+            .AnyAsync(p => p.StoreId == storeId && p.Code == code);
+    }
+
+    public async Task AddAsync(Product product)
+    {
+        await _context.Products.AddAsync(product);
+        await _context.SaveChangesAsync();
+        _logger.LogInformation("Product {ProductId} created successfully", product.Id);
+    }
+
+    public async Task UpdateAsync(Product product)
+    {
+        _context.Products.Update(product);
+        await _context.SaveChangesAsync();
+        _logger.LogInformation("Product {ProductId} updated successfully", product.Id);
+    }
+
+    public async Task DeleteAsync(Product product)
+    {
+        product.IsActive = false;
+        product.UpdatedAt = DateTime.UtcNow;
+        await UpdateAsync(product);
+        _logger.LogInformation("Product {ProductId} soft deleted", product.Id);
+    }
+
+    public async Task<BulkOperationResult> ProcessBulkOperationsAsync(BulkProductOperations operations)
+    {
+        var result = new BulkOperationResult();
+        using var transaction = await _context.Database.BeginTransactionAsync();
+
+        try
+        {
+            foreach (var operation in operations.Operations)
+            {
+                switch (operation.Type)
+                {
+                    case BulkOperationType.Create:
+                        var newProduct = new Product
+                        {
+                            Id = Guid.NewGuid(),
+                            Name = operation.Data.Name,
+                            Code = operation.Data.Code,
+                            Price = operation.Data.Price,
+                            StockQuantity = operation.Data.StockQuantity,
+                            StoreId = operation.StoreId
+                        };
+                        await AddAsync(newProduct);
+                        result.CreatedIds.Add(newProduct.Id);
+                        break;
+
+                    case BulkOperationType.Update:
+                        var existingProduct = await GetByIdAsync(operation.ProductId.Value);
+                        if (existingProduct != null)
+                        {
+                            existingProduct.Name = operation.Data.Name ?? existingProduct.Name;
+                            existingProduct.Price = operation.Data.Price ?? existingProduct.Price;
+                            await UpdateAsync(existingProduct);
+                            result.UpdatedIds.Add(existingProduct.Id);
+                        }
+                        break;
+
+                    case BulkOperationType.Delete:
+                        var productToDelete = await GetByIdAsync(operation.ProductId.Value);
+                        if (productToDelete != null)
+                        {
+                            await DeleteAsync(productToDelete);
+                            result.DeletedIds.Add(productToDelete.Id);
+                        }
+                        break;
+                }
+            }
+
+            await transaction.CommitAsync();
+            result.Success = true;
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            result.Success = false;
+            result.Error = ex.Message;
+            _logger.LogError(ex, "Bulk operations failed");
+        }
+
+        return result;
+    }
+}
